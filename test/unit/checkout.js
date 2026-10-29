@@ -1,4 +1,5 @@
 import Checkout from '../../src/components/checkout';
+import checkoutWindowTracker from '../../src/utils/checkout-window';
 
 describe('Checkout class', () => {
   let checkout;
@@ -29,6 +30,19 @@ describe('Checkout class', () => {
         checkout.open('test.com');
         assert.calledOnce(openStub);
         assert.calledWith(openStub, 'test.com', 'checkout', checkout.params);
+        openStub.restore();
+      });
+
+      it('tracks the window it opened so its messages can be trusted', () => {
+        const popup = {};
+        const openStub = sinon.stub(window, 'open').returns(popup);
+        checkout.config.cart = {
+          popup: true,
+        };
+        checkout.open('https://checkout.example.com/1/checkouts/abc');
+        openStub.restore();
+        assert.isTrue(checkoutWindowTracker.isTrustedMessage({source: popup, origin: 'https://checkout.example.com'}));
+        checkoutWindowTracker.reset();
       });
     });
 

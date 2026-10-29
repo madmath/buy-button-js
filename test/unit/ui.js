@@ -11,6 +11,7 @@ import * as throttle from '../../src/utils/throttle';
 import hostStyles from '../../src/styles/host/host';
 import conditionalStyles from '../../src/styles/host/conditional';
 import shopFixture from '../fixtures/shop-info';
+import checkoutWindowTracker from '../../src/utils/checkout-window';
 
 const DATA_ATTRIBUTE = 'data-shopify-buy-ui';
 const config = {
@@ -991,23 +992,83 @@ describe('ui class', () => {
         });
 
         describe('_bindPostMessage', () => {
-          let event;
-          let parseStub;
+          const checkoutUrl = 'https://checkout.example.com/1/checkouts/abc';
+          const checkoutOrigin = 'https://checkout.example.com';
+          const syncCartMessage = JSON.stringify({syncCart: true});
+          const thankYouMessage = JSON.stringify({current_checkout_page: '/checkout/thank_you'});
+          let reloadStub;
+          let checkoutWindow;
+
+          function dispatchMessage(data, origin, source) {
+            const event = new Event('message');
+            event.data = data;
+            event.origin = origin;
+            event.source = source;
+            window.dispatchEvent(event);
+          }
 
           beforeEach(() => {
-            parseStub = sinon.stub(JSON, 'parse').returns({});
-            event = new Event('message');
-            event.data = 'test';
+            reloadStub = sinon.stub(UI.prototype, '_reloadPage');
+            checkoutWindow = {};
           });
 
           afterEach(() => {
-            parseStub.restore();
+            reloadStub.restore();
+            checkoutWindowTracker.reset();
           });
 
-          it('parses data from message', () => {
-            window.dispatchEvent(event);
-            // called once is not tested because the stub is on the global JSON instance rather than the class instance
-            assert.calledWith(parseStub, 'test');
+          describe('from the checkout window this UI opened', () => {
+            beforeEach(() => {
+              checkoutWindowTracker.track(checkoutWindow, checkoutUrl);
+            });
+
+            it('parses data from message', () => {
+              const parseStub = sinon.stub(JSON, 'parse').returns({});
+              dispatchMessage('test', checkoutOrigin, checkoutWindow);
+              parseStub.restore();
+              // called once is not tested because the stub is on the global JSON instance rather than the class instance
+              assert.calledWith(parseStub, 'test');
+            });
+
+            it('reloads the page on syncCart', () => {
+              dispatchMessage(syncCartMessage, checkoutOrigin, checkoutWindow);
+              assert.called(reloadStub);
+            });
+
+            it('reloads the page on the checkout thank you page', () => {
+              dispatchMessage(thankYouMessage, checkoutOrigin, checkoutWindow);
+              assert.called(reloadStub);
+            });
+
+            it('reloads the page when the checkout window is on the configured shop domain', () => {
+              dispatchMessage(syncCartMessage, `https://${client.config.domain}`, checkoutWindow);
+              assert.called(reloadStub);
+            });
+
+            it('does not reload the page when the checkout window is on an untrusted origin', () => {
+              dispatchMessage(syncCartMessage, 'https://attacker.example', checkoutWindow);
+              dispatchMessage(thankYouMessage, 'https://attacker.example', checkoutWindow);
+              assert.notCalled(reloadStub);
+            });
+
+            it('does not reload the page when a different window sends from the checkout origin', () => {
+              dispatchMessage(syncCartMessage, checkoutOrigin, {});
+              dispatchMessage(thankYouMessage, checkoutOrigin, {});
+              assert.notCalled(reloadStub);
+            });
+          });
+
+          it('does not reload the page on a cross-origin message when no checkout window was opened', () => {
+            dispatchMessage(syncCartMessage, 'https://attacker.example', {});
+            dispatchMessage(thankYouMessage, 'https://attacker.example', {});
+            assert.notCalled(reloadStub);
+          });
+
+          it('does not parse messages from untrusted senders', () => {
+            const parseSpy = sinon.spy(JSON, 'parse');
+            dispatchMessage(syncCartMessage, 'https://attacker.example', {});
+            parseSpy.restore();
+            assert.neverCalledWith(parseSpy, syncCartMessage);
           });
         });
       });
